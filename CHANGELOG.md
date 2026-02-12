@@ -3,4 +3,9 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
-- Initial setup
+
+## [1.0.2] - 2026-02-12
+- Fix release packaging by excluding nested `*.zip` files.
+- Clarify install instructions: use release asset ZIP, not GitHub source ZIP.
+- Ignore plugin ZIP build artifacts and remove committed ZIP artifact.
+- Fix `scripts/update-changelog.sh` variable interpolation error.

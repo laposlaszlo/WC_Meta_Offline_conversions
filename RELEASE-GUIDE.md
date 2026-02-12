@@ -6,6 +6,10 @@ This repository is configured to publish plugin updates via GitHub releases.
 - The GitHub Action packages `meta-offline-conversions/` into `meta-offline-conversions.zip`.
 - The release asset is used by the Plugin Update Checker.
 
+## Install From GitHub Release
+- In WordPress, upload the release asset file: `meta-offline-conversions.zip`.
+- Do not upload GitHub's auto-generated `Source code (zip)` file. That archive is not a direct WordPress plugin package.
+
 ## Release Steps
 1. Update the plugin version:
    - Manual: edit `meta-offline-conversions/meta-offline-conversions.php`

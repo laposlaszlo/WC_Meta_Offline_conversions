@@ -12,3 +12,4 @@ wpcs/
 *.csv
 .vscode
 meta-offline-conversions.zip
+meta-offline-conversions/*.zip

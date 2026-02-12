@@ -10,6 +10,7 @@ rm -f "$OUTPUT"
 zip -r "$OUTPUT" meta-offline-conversions \
   -x "**/.DS_Store" \
   -x "**/.git/**" \
-  -x "**/.github/**"
+  -x "**/.github/**" \
+  -x "**/*.zip"
 
 echo "Created: $OUTPUT"

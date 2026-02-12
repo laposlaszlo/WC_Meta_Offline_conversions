@@ -45,7 +45,10 @@ header = "# Changelog\n\n"
 if not text.startswith(header):
     raise SystemExit("Invalid changelog header")
 
-section = f"## [{VERSION}] - {TODAY}\n{COMMITS}\n\n"
+section = """## [$VERSION] - $TODAY
+$COMMITS
+
+"""
 
 if "## [Unreleased]" in text:
     parts = text.split("## [Unreleased]", 1)
@@ -54,5 +57,5 @@ else:
     new_text = text + "\n" + section
 
 path.write_text(new_text)
-print(f"Changelog updated for {VERSION}")
+print("Changelog updated for $VERSION")
 PY

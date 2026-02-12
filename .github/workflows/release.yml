@@ -20,7 +20,8 @@ jobs:
           zip -r meta-offline-conversions.zip meta-offline-conversions \
             -x "**/.DS_Store" \
             -x "**/.git/**" \
-            -x "**/.github/**"
+            -x "**/.github/**" \
+            -x "**/*.zip"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
