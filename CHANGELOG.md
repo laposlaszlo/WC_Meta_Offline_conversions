@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-02-12
+- Release v1.0.2
+
 ## [1.0.2] - 2026-02-12
 - Fix release packaging by excluding nested `*.zip` files.
 - Clarify install instructions: use release asset ZIP, not GitHub source ZIP.
