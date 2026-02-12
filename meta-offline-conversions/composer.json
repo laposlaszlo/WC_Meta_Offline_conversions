@@ -1,0 +1,16 @@
+{
+  "name": "laposlaszlo/meta-offline-conversions",
+  "description": "Meta Offline Conversions for WooCommerce",
+  "type": "wordpress-plugin",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Lapos Laszlo",
+      "email": "info@laposlaszlo.com"
+    }
+  ],
+  "require": {
+    "php": ">=7.4",
+    "yahnis-elsts/plugin-update-checker": "^5.4"
+  }
+}

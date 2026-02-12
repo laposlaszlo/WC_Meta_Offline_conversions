@@ -1,0 +1,14 @@
+.DS_Store
+node_modules
+instashow
+npm-debug.log
+dist
+*.sass-cache*
+*.log
+.idea/
+*.swp
+packaged/
+wpcs/
+*.csv
+.vscode
+meta-offline-conversions.zip

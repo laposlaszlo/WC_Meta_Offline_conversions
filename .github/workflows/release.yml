@@ -1,0 +1,29 @@
+name: Release Plugin
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build zip
+        run: |
+          zip -r meta-offline-conversions.zip meta-offline-conversions \
+            -x "**/.DS_Store" \
+            -x "**/.git/**" \
+            -x "**/.github/**"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: meta-offline-conversions.zip
+          generate_release_notes: true

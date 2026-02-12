@@ -5,6 +5,7 @@
  * Version: 1.0.0
  * Author: Your Name
  * Text Domain: meta-offline-conversions
+ * Plugin URI: https://github.com/laposlaszlo/WC_Meta_Offline_conversions
  */
 
 if (!defined('ABSPATH')) {
@@ -16,10 +17,16 @@ define('MOC_OPTION_KEY', 'moc_settings');
 define('MOC_CAPABILITY', 'manage_woocommerce');
 define('MOC_CRON_HOOK', 'moc_cron_send_past_orders');
 define('MOC_BULK_LOG_OPTION', 'moc_bulk_log');
+define('MOC_PLUGIN_FILE', __FILE__);
+define('MOC_PLUGIN_DIR', __DIR__);
+define('MOC_UPDATE_REPO_URL', 'https://github.com/laposlaszlo/WC_Meta_Offline_conversions');
+
+$GLOBALS['moc_update_checker_status'] = 'unknown';
 
 register_activation_hook(__FILE__, 'moc_activate');
 
 add_action('plugins_loaded', 'moc_init');
+add_action('plugins_loaded', 'moc_init_update_checker');
 add_action(MOC_CRON_HOOK, 'moc_cron_send_past_orders');
 add_filter('cron_schedules', 'moc_cron_schedules');
 
@@ -127,6 +134,42 @@ function moc_init() {
     add_action('init', 'moc_ensure_cron_scheduled', 5);
 }
 
+function moc_init_update_checker() {
+    $repo_url = apply_filters('moc_update_repo_url', MOC_UPDATE_REPO_URL);
+    if (empty($repo_url)) {
+        $GLOBALS['moc_update_checker_status'] = 'disabled';
+        return;
+    }
+
+    $autoload_file = MOC_PLUGIN_DIR . '/vendor/autoload.php';
+    if (!file_exists($autoload_file)) {
+        $GLOBALS['moc_update_checker_status'] = 'missing_vendor';
+        return;
+    }
+
+    require_once $autoload_file;
+
+    if (!class_exists('YahnisElsts\\PluginUpdateChecker\\v5\\PucFactory')) {
+        $GLOBALS['moc_update_checker_status'] = 'missing_class';
+        return;
+    }
+
+    $update_checker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+        $repo_url,
+        MOC_PLUGIN_FILE,
+        'meta-offline-conversions'
+    );
+
+    $update_checker->getVcsApi()->enableReleaseAssets();
+    $update_checker->setBranch('main');
+
+    if (defined('MOC_GITHUB_TOKEN') && MOC_GITHUB_TOKEN) {
+        $update_checker->setAuthentication(MOC_GITHUB_TOKEN);
+    }
+
+    $GLOBALS['moc_update_checker_status'] = 'ok';
+}
+
 if (is_admin()) {
     add_action('admin_menu', 'moc_add_admin_page');
     add_action('admin_init', 'moc_register_settings');
@@ -186,6 +229,17 @@ function moc_admin_notices() {
     if (!empty($settings['access_token']) && strpos($settings['access_token'], 'raw:') === 0) {
         echo '<div class="notice notice-warning"><p>';
         echo esc_html__('Access token is stored without encryption because OpenSSL is unavailable. Consider enabling OpenSSL.', 'meta-offline-conversions');
+        echo '</p></div>';
+    }
+
+    $update_status = isset($GLOBALS['moc_update_checker_status']) ? $GLOBALS['moc_update_checker_status'] : 'unknown';
+    if ($update_status === 'missing_vendor') {
+        echo '<div class="notice notice-warning"><p>';
+        echo esc_html__('Update checker is inactive because vendor dependencies are missing. Install with Composer or include the vendor directory.', 'meta-offline-conversions');
+        echo '</p></div>';
+    } elseif ($update_status === 'missing_class') {
+        echo '<div class="notice notice-warning"><p>';
+        echo esc_html__('Update checker is inactive because Plugin Update Checker class is missing.', 'meta-offline-conversions');
         echo '</p></div>';
     }
 }
