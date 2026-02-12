@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Meta Offline Conversions for WooCommerce
  * Description: Automatically sends WooCommerce Purchase events to the Meta Conversions API and stores FBP/FBC cookies on orders.
- * Version: 1.0.3
+ * Version: 1.0.4
  * Author: Lapos László
  * Text Domain: meta-offline-conversions
  * Plugin URI: https://github.com/laposlaszlo/WC_Meta_Offline_conversions
@@ -12,11 +12,12 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MOC_VERSION', '1.0.3');
+define('MOC_VERSION', '1.0.4');
 define('MOC_OPTION_KEY', 'moc_settings');
 define('MOC_CAPABILITY', 'manage_woocommerce');
 define('MOC_CRON_HOOK', 'moc_cron_send_past_orders');
 define('MOC_BULK_LOG_OPTION', 'moc_bulk_log');
+define('MOC_ADMIN_LOG_OPTION', 'moc_admin_log');
 define('MOC_PLUGIN_FILE', __FILE__);
 define('MOC_PLUGIN_DIR', __DIR__);
 define('MOC_UPDATE_REPO_URL', 'https://github.com/laposlaszlo/WC_Meta_Offline_conversions');
@@ -174,6 +175,7 @@ if (is_admin()) {
     add_action('admin_menu', 'moc_add_admin_page');
     add_action('admin_init', 'moc_register_settings');
     add_action('admin_post_moc_send_past_orders', 'moc_handle_send_past_orders');
+    add_action('admin_post_moc_clear_admin_log', 'moc_handle_clear_admin_log');
     add_action('admin_notices', 'moc_admin_notices');
 }
 
@@ -216,6 +218,12 @@ function moc_admin_notices() {
     if (isset($_GET['moc_bulk_locked'])) {
         echo '<div class="notice notice-warning"><p>';
         echo esc_html__('A bulk send is already running. Please wait for it to finish.', 'meta-offline-conversions');
+        echo '</p></div>';
+    }
+
+    if (isset($_GET['moc_admin_log_cleared'])) {
+        echo '<div class="notice notice-success"><p>';
+        echo esc_html__('Event log was cleared.', 'meta-offline-conversions');
         echo '</p></div>';
     }
 
@@ -297,7 +305,7 @@ function moc_render_settings_page() {
     echo '<tr><th scope="row">' . esc_html__('Debug Logging', 'meta-offline-conversions') . '</th><td>';
     echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[debug_log]" value="1" ' . checked($debug_log, true, false) . ' /> ';
     echo esc_html__('Enable verbose logs for testing', 'meta-offline-conversions') . '</label>';
-    echo '<p class="description">' . esc_html__('Logs are written to WooCommerce logs and PHP error log while enabled.', 'meta-offline-conversions') . '</p>';
+    echo '<p class="description">' . esc_html__('Logs are written to WooCommerce logs, PHP error log, and shown below in Event Log while enabled.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Auto Backfill (WP-Cron)', 'meta-offline-conversions') . '</th><td>';
@@ -380,6 +388,56 @@ function moc_render_settings_page() {
         }
     }
 
+    echo '<hr />';
+    echo '<h2>' . esc_html__('Event Log', 'meta-offline-conversions') . '</h2>';
+    echo '<p>' . esc_html__('Recent plugin events from manual send, cron, and direct order send.', 'meta-offline-conversions') . '</p>';
+
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-bottom:12px;">';
+    echo '<input type="hidden" name="action" value="moc_clear_admin_log" />';
+    wp_nonce_field('moc_clear_admin_log');
+    submit_button(__('Clear Log', 'meta-offline-conversions'), 'secondary', 'submit', false);
+    echo '</form>';
+
+    $admin_log = moc_get_admin_log();
+    if (empty($admin_log)) {
+        echo '<p>' . esc_html__('No event log entries yet.', 'meta-offline-conversions') . '</p>';
+    } else {
+        $display_max = (int) apply_filters('moc_admin_log_display_max_items', 150);
+        if ($display_max < 10) {
+            $display_max = 10;
+        }
+
+        $entries = array_reverse($admin_log);
+        if (count($entries) > $display_max) {
+            $entries = array_slice($entries, 0, $display_max);
+        }
+
+        echo '<table class="widefat striped"><thead><tr>';
+        echo '<th>' . esc_html__('Time', 'meta-offline-conversions') . '</th>';
+        echo '<th>' . esc_html__('Level', 'meta-offline-conversions') . '</th>';
+        echo '<th>' . esc_html__('Message', 'meta-offline-conversions') . '</th>';
+        echo '</tr></thead><tbody>';
+
+        foreach ($entries as $entry) {
+            $time = isset($entry['time']) ? (string) $entry['time'] : '';
+            $level = isset($entry['level']) ? strtolower((string) $entry['level']) : 'info';
+            $message = isset($entry['message']) ? (string) $entry['message'] : '';
+            $context = isset($entry['context']) ? (string) $entry['context'] : '';
+
+            echo '<tr>';
+            echo '<td>' . esc_html($time !== '' ? $time : __('unknown', 'meta-offline-conversions')) . '</td>';
+            echo '<td>' . esc_html(strtoupper($level)) . '</td>';
+            echo '<td>' . esc_html($message);
+            if ($context !== '') {
+                echo '<br /><code>' . esc_html($context) . '</code>';
+            }
+            echo '</td>';
+            echo '</tr>';
+        }
+
+        echo '</tbody></table>';
+    }
+
     echo '</div>';
 }
 
@@ -435,12 +493,61 @@ function moc_debug_enabled() {
     return !empty($settings['debug_log']);
 }
 
+function moc_get_admin_log() {
+    $log = get_option(MOC_ADMIN_LOG_OPTION, []);
+    return is_array($log) ? $log : [];
+}
+
+function moc_get_admin_log_limit() {
+    $limit = (int) apply_filters('moc_admin_log_max_items', 500);
+    if ($limit < 50) {
+        $limit = 50;
+    }
+    return $limit;
+}
+
+function moc_store_admin_log($entries) {
+    update_option(MOC_ADMIN_LOG_OPTION, $entries, false);
+}
+
+function moc_clear_admin_log() {
+    delete_option(MOC_ADMIN_LOG_OPTION);
+}
+
+function moc_add_admin_log_entry($message, $level = 'info', $context = []) {
+    $entries = moc_get_admin_log();
+
+    $context_text = '';
+    if (!empty($context)) {
+        $context_json = wp_json_encode((array) $context);
+        if (is_string($context_json)) {
+            $context_text = moc_shorten_message($context_json, 1000);
+        }
+    }
+
+    $entries[] = [
+        'time' => current_time('mysql'),
+        'level' => sanitize_text_field((string) $level),
+        'message' => moc_shorten_message((string) $message, 1000),
+        'context' => $context_text,
+    ];
+
+    $limit = moc_get_admin_log_limit();
+    if (count($entries) > $limit) {
+        $entries = array_slice($entries, -$limit);
+    }
+
+    moc_store_admin_log($entries);
+}
+
 function moc_log($message, $level = 'info', $context = []) {
     $message = '[Meta Offline] ' . $message;
 
     if ($level === 'debug' && !moc_debug_enabled()) {
         return;
     }
+
+    moc_add_admin_log_entry($message, $level, $context);
 
     if (function_exists('wc_get_logger')) {
         $logger = wc_get_logger();
@@ -801,6 +908,7 @@ function moc_send_past_orders_to_meta_bulk($limit = 50, $trigger = 'manual') {
     }
 
     moc_set_bulk_lock();
+    moc_log("Bulk send started. trigger={$trigger}, limit={$limit}.", 'info');
 
     $args = [
         'status' => 'completed',
@@ -864,6 +972,7 @@ function moc_send_past_orders_to_meta_bulk($limit = 50, $trigger = 'manual') {
 
     moc_store_bulk_log($log);
     moc_clear_bulk_lock();
+    moc_log("Bulk send finished. trigger={$trigger}, total={$total}, sent={$sent}, skipped={$skipped}, errors={$errors}.", 'info');
 
     return $log;
 }
@@ -926,6 +1035,26 @@ function moc_handle_send_past_orders() {
             'moc_bulk_total' => isset($result['total']) ? $result['total'] : 0,
             'moc_bulk_errors' => isset($result['errors']) ? $result['errors'] : 0,
             'moc_bulk_skipped' => isset($result['skipped']) ? $result['skipped'] : 0,
+        ],
+        admin_url('admin.php')
+    );
+
+    wp_safe_redirect($redirect);
+    exit;
+}
+
+function moc_handle_clear_admin_log() {
+    if (!current_user_can(MOC_CAPABILITY)) {
+        wp_die(esc_html__('Insufficient permissions.', 'meta-offline-conversions'));
+    }
+
+    check_admin_referer('moc_clear_admin_log');
+    moc_clear_admin_log();
+
+    $redirect = add_query_arg(
+        [
+            'page' => 'moc-settings',
+            'moc_admin_log_cleared' => 1,
         ],
         admin_url('admin.php')
     );
