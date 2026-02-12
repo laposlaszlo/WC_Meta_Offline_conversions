@@ -1,0 +1,846 @@
+<?php
+/**
+ * Plugin Name: Meta Offline Conversions for WooCommerce
+ * Description: Automatically sends WooCommerce Purchase events to the Meta Conversions API and stores FBP/FBC cookies on orders.
+ * Version: 1.0.0
+ * Author: Your Name
+ * Text Domain: meta-offline-conversions
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+define('MOC_VERSION', '1.0.0');
+define('MOC_OPTION_KEY', 'moc_settings');
+define('MOC_CAPABILITY', 'manage_woocommerce');
+define('MOC_CRON_HOOK', 'moc_cron_send_past_orders');
+define('MOC_BULK_LOG_OPTION', 'moc_bulk_log');
+
+register_activation_hook(__FILE__, 'moc_activate');
+
+add_action('plugins_loaded', 'moc_init');
+add_action(MOC_CRON_HOOK, 'moc_cron_send_past_orders');
+add_filter('cron_schedules', 'moc_cron_schedules');
+
+function moc_activate() {
+    if (get_option(MOC_OPTION_KEY, null) === null) {
+        add_option(MOC_OPTION_KEY, [], '', 'no');
+    }
+
+    $settings = moc_get_settings();
+    if (!empty($settings['enable_cron'])) {
+        $interval = !empty($settings['cron_interval']) ? $settings['cron_interval'] : 'hourly';
+        moc_schedule_cron($interval);
+    }
+}
+
+function moc_cron_schedules($schedules) {
+    $schedules['moc_5min'] = [
+        'interval' => 5 * MINUTE_IN_SECONDS,
+        'display' => __('Every 5 minutes', 'meta-offline-conversions'),
+    ];
+    $schedules['moc_15min'] = [
+        'interval' => 15 * MINUTE_IN_SECONDS,
+        'display' => __('Every 15 minutes', 'meta-offline-conversions'),
+    ];
+    $schedules['moc_30min'] = [
+        'interval' => 30 * MINUTE_IN_SECONDS,
+        'display' => __('Every 30 minutes', 'meta-offline-conversions'),
+    ];
+
+    return $schedules;
+}
+
+function moc_get_cron_interval_options() {
+    return [
+        'moc_5min' => __('Every 5 minutes', 'meta-offline-conversions'),
+        'moc_15min' => __('Every 15 minutes', 'meta-offline-conversions'),
+        'moc_30min' => __('Every 30 minutes', 'meta-offline-conversions'),
+        'hourly' => __('Hourly', 'meta-offline-conversions'),
+        'twicedaily' => __('Twice Daily', 'meta-offline-conversions'),
+        'daily' => __('Daily', 'meta-offline-conversions'),
+    ];
+}
+
+function moc_schedule_cron($interval) {
+    if (!moc_is_valid_cron_interval($interval)) {
+        $interval = 'hourly';
+    }
+
+    wp_clear_scheduled_hook(MOC_CRON_HOOK);
+
+    if (!wp_next_scheduled(MOC_CRON_HOOK)) {
+        wp_schedule_event(time() + 60, $interval, MOC_CRON_HOOK);
+    }
+}
+
+function moc_clear_cron() {
+    wp_clear_scheduled_hook(MOC_CRON_HOOK);
+}
+
+function moc_is_valid_cron_interval($interval) {
+    $options = moc_get_cron_interval_options();
+    return isset($options[$interval]);
+}
+
+function moc_sync_cron_settings($old_settings, $new_settings) {
+    $old_enabled = !empty($old_settings['enable_cron']);
+    $new_enabled = !empty($new_settings['enable_cron']);
+    $old_interval = !empty($old_settings['cron_interval']) ? $old_settings['cron_interval'] : 'hourly';
+    $new_interval = !empty($new_settings['cron_interval']) ? $new_settings['cron_interval'] : 'hourly';
+
+    if ($new_enabled) {
+        if (!$old_enabled || $old_interval !== $new_interval) {
+            moc_schedule_cron($new_interval);
+        }
+    } elseif ($old_enabled) {
+        moc_clear_cron();
+    }
+}
+
+function moc_ensure_cron_scheduled() {
+    $settings = moc_get_settings();
+    $enabled = !empty($settings['enable_cron']);
+    $interval = !empty($settings['cron_interval']) ? $settings['cron_interval'] : 'hourly';
+
+    if ($enabled) {
+        if (!wp_next_scheduled(MOC_CRON_HOOK)) {
+            moc_schedule_cron($interval);
+        }
+    } else {
+        if (wp_next_scheduled(MOC_CRON_HOOK)) {
+            moc_clear_cron();
+        }
+    }
+}
+
+function moc_init() {
+    if (!class_exists('WooCommerce')) {
+        add_action('admin_notices', 'moc_admin_notice_wc_missing');
+        return;
+    }
+
+    add_action('init', 'moc_maybe_set_fb_cookies', 1);
+    add_action('woocommerce_checkout_order_processed', 'moc_save_fb_cookies_to_order', 10, 1);
+    add_action('woocommerce_order_status_completed', 'moc_send_purchase_to_meta', 10, 1);
+    add_action('init', 'moc_ensure_cron_scheduled', 5);
+}
+
+if (is_admin()) {
+    add_action('admin_menu', 'moc_add_admin_page');
+    add_action('admin_init', 'moc_register_settings');
+    add_action('admin_post_moc_send_past_orders', 'moc_handle_send_past_orders');
+    add_action('admin_notices', 'moc_admin_notices');
+}
+
+function moc_admin_notice_wc_missing() {
+    if (!current_user_can(MOC_CAPABILITY)) {
+        return;
+    }
+
+    echo '<div class="notice notice-warning"><p>';
+    echo esc_html__('Meta Offline Conversions for WooCommerce requires WooCommerce to be active.', 'meta-offline-conversions');
+    echo '</p></div>';
+}
+
+function moc_admin_notices() {
+    if (!current_user_can(MOC_CAPABILITY)) {
+        return;
+    }
+
+    if (!isset($_GET['page']) || $_GET['page'] !== 'moc-settings') {
+        return;
+    }
+
+    if (isset($_GET['moc_bulk_sent'])) {
+        $sent = intval($_GET['moc_bulk_sent']);
+        $total = intval($_GET['moc_bulk_total']);
+        $errors = intval($_GET['moc_bulk_errors']);
+        $skipped = isset($_GET['moc_bulk_skipped']) ? intval($_GET['moc_bulk_skipped']) : 0;
+
+        echo '<div class="notice notice-success"><p>';
+        printf(
+            esc_html__('Bulk send completed. Sent: %d / %d. Skipped: %d. Errors: %d.', 'meta-offline-conversions'),
+            $sent,
+            $total,
+            $skipped,
+            $errors
+        );
+        echo '</p></div>';
+    }
+
+    if (isset($_GET['moc_bulk_locked'])) {
+        echo '<div class="notice notice-warning"><p>';
+        echo esc_html__('A bulk send is already running. Please wait for it to finish.', 'meta-offline-conversions');
+        echo '</p></div>';
+    }
+
+    if (!moc_get_pixel_id() || !moc_get_access_token()) {
+        echo '<div class="notice notice-warning"><p>';
+        echo esc_html__('Meta Offline Conversions is not fully configured. Please set the Pixel ID and Access Token.', 'meta-offline-conversions');
+        echo '</p></div>';
+    }
+
+    $settings = moc_get_settings();
+    if (!empty($settings['access_token']) && strpos($settings['access_token'], 'raw:') === 0) {
+        echo '<div class="notice notice-warning"><p>';
+        echo esc_html__('Access token is stored without encryption because OpenSSL is unavailable. Consider enabling OpenSSL.', 'meta-offline-conversions');
+        echo '</p></div>';
+    }
+}
+
+function moc_add_admin_page() {
+    add_submenu_page(
+        'woocommerce',
+        __('Meta Offline Conversions', 'meta-offline-conversions'),
+        __('Meta Offline Conversions', 'meta-offline-conversions'),
+        MOC_CAPABILITY,
+        'moc-settings',
+        'moc_render_settings_page'
+    );
+}
+
+function moc_register_settings() {
+    register_setting('moc_settings_group', MOC_OPTION_KEY, 'moc_sanitize_settings');
+}
+
+function moc_render_settings_page() {
+    if (!current_user_can(MOC_CAPABILITY)) {
+        return;
+    }
+
+    $settings = moc_get_settings();
+    $pixel_id = isset($settings['pixel_id']) ? $settings['pixel_id'] : '';
+    $token_last4 = isset($settings['token_last4']) ? $settings['token_last4'] : '';
+    $token_hint = $token_last4 ? '****' . $token_last4 : __('not set', 'meta-offline-conversions');
+    $enable_cron = !empty($settings['enable_cron']);
+    $cron_interval = !empty($settings['cron_interval']) ? $settings['cron_interval'] : 'hourly';
+    $cron_batch_size = !empty($settings['cron_batch_size']) ? (int) $settings['cron_batch_size'] : 50;
+    $cron_next = wp_next_scheduled(MOC_CRON_HOOK);
+    $cron_next_human = $cron_next ? date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $cron_next) : __('Not scheduled', 'meta-offline-conversions');
+
+    echo '<div class="wrap">';
+    echo '<h1>' . esc_html__('Meta Offline Conversions', 'meta-offline-conversions') . '</h1>';
+
+    echo '<form method="post" action="options.php">';
+    settings_fields('moc_settings_group');
+
+    echo '<table class="form-table" role="presentation">';
+
+    echo '<tr><th scope="row">' . esc_html__('Pixel ID', 'meta-offline-conversions') . '</th><td>';
+    echo '<input type="text" name="' . esc_attr(MOC_OPTION_KEY) . '[pixel_id]" value="' . esc_attr($pixel_id) . '" class="regular-text" />';
+    echo '<p class="description">' . esc_html__('Example: 1830160027863323', 'meta-offline-conversions') . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Access Token', 'meta-offline-conversions') . '</th><td>';
+    echo '<input type="password" name="' . esc_attr(MOC_OPTION_KEY) . '[access_token]" value="" class="regular-text" autocomplete="new-password" />';
+    echo '<p class="description">' . sprintf(esc_html__('Leave blank to keep existing token. Current: %s', 'meta-offline-conversions'), esc_html($token_hint)) . '</p>';
+    echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[clear_token]" value="1" /> ' . esc_html__('Clear stored token', 'meta-offline-conversions') . '</label>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Auto Backfill (WP-Cron)', 'meta-offline-conversions') . '</th><td>';
+    echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[enable_cron]" value="1" ' . checked($enable_cron, true, false) . ' /> ';
+    echo esc_html__('Enable automatic backfill of past orders', 'meta-offline-conversions') . '</label>';
+    echo '<p class="description">' . esc_html__('WP-Cron must be running for scheduled backfills.', 'meta-offline-conversions') . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Backfill Interval', 'meta-offline-conversions') . '</th><td>';
+    echo '<select name="' . esc_attr(MOC_OPTION_KEY) . '[cron_interval]">';
+    foreach (moc_get_cron_interval_options() as $key => $label) {
+        echo '<option value="' . esc_attr($key) . '" ' . selected($cron_interval, $key, false) . '>' . esc_html($label) . '</option>';
+    }
+    echo '</select>';
+    echo '<p class="description">' . esc_html__('Next run:', 'meta-offline-conversions') . ' ' . esc_html($cron_next_human) . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Backfill Batch Size', 'meta-offline-conversions') . '</th><td>';
+    echo '<input type="number" name="' . esc_attr(MOC_OPTION_KEY) . '[cron_batch_size]" min="1" max="200" value="' . esc_attr((string) $cron_batch_size) . '" />';
+    echo '<p class="description">' . esc_html__('Number of completed orders per cron run.', 'meta-offline-conversions') . '</p>';
+    echo '</td></tr>';
+
+    echo '</table>';
+
+    submit_button();
+    echo '</form>';
+
+    echo '<hr />';
+    echo '<h2>' . esc_html__('Send Past Orders', 'meta-offline-conversions') . '</h2>';
+    echo '<p>' . esc_html__('Click the button to send completed orders that have not been sent yet.', 'meta-offline-conversions') . '</p>';
+
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+    echo '<input type="hidden" name="action" value="moc_send_past_orders" />';
+    wp_nonce_field('moc_send_past_orders');
+    echo '<label>' . esc_html__('Limit', 'meta-offline-conversions') . ' '; 
+    echo '<input type="number" name="limit" min="1" max="200" value="50" /></label> ';
+    submit_button(__('Send Now', 'meta-offline-conversions'), 'secondary', 'submit', false);
+    echo '</form>';
+
+    $log = moc_get_bulk_log();
+    echo '<hr />';
+    echo '<h2>' . esc_html__('Bulk Log', 'meta-offline-conversions') . '</h2>';
+    if (empty($log)) {
+        echo '<p>' . esc_html__('No bulk log available yet.', 'meta-offline-conversions') . '</p>';
+    } else {
+        $run_at = !empty($log['run_at']) ? esc_html($log['run_at']) : '';
+        $trigger = !empty($log['trigger']) ? esc_html($log['trigger']) : '';
+        $total = isset($log['total']) ? (int) $log['total'] : 0;
+        $sent = isset($log['sent']) ? (int) $log['sent'] : 0;
+        $errors = isset($log['errors']) ? (int) $log['errors'] : 0;
+        $skipped = isset($log['skipped']) ? (int) $log['skipped'] : 0;
+
+        echo '<p>' . sprintf(
+            esc_html__('Last run: %s | Trigger: %s | Total: %d | Sent: %d | Skipped: %d | Errors: %d', 'meta-offline-conversions'),
+            $run_at ? $run_at : esc_html__('unknown', 'meta-offline-conversions'),
+            $trigger ? $trigger : esc_html__('unknown', 'meta-offline-conversions'),
+            $total,
+            $sent,
+            $skipped,
+            $errors
+        ) . '</p>';
+
+        if (!empty($log['items']) && is_array($log['items'])) {
+            echo '<table class="widefat striped"><thead><tr>';
+            echo '<th>' . esc_html__('Order ID', 'meta-offline-conversions') . '</th>';
+            echo '<th>' . esc_html__('Status', 'meta-offline-conversions') . '</th>';
+            echo '<th>' . esc_html__('Message', 'meta-offline-conversions') . '</th>';
+            echo '</tr></thead><tbody>';
+            foreach ($log['items'] as $item) {
+                $order_id = isset($item['order_id']) ? (int) $item['order_id'] : 0;
+                $status = isset($item['status']) ? esc_html($item['status']) : '';
+                $message = isset($item['message']) ? esc_html($item['message']) : '';
+                echo '<tr>';
+                echo '<td>' . esc_html((string) $order_id) . '</td>';
+                echo '<td>' . $status . '</td>';
+                echo '<td>' . $message . '</td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+        }
+    }
+
+    echo '</div>';
+}
+
+function moc_sanitize_settings($input) {
+    $settings = moc_get_settings();
+    $output = $settings;
+
+    $pixel_id = isset($input['pixel_id']) ? sanitize_text_field($input['pixel_id']) : '';
+    $output['pixel_id'] = $pixel_id;
+
+    $output['enable_cron'] = !empty($input['enable_cron']) ? 1 : 0;
+    $interval = isset($input['cron_interval']) ? sanitize_text_field($input['cron_interval']) : 'hourly';
+    if (!moc_is_valid_cron_interval($interval)) {
+        $interval = 'hourly';
+    }
+    $output['cron_interval'] = $interval;
+
+    $batch_size = isset($input['cron_batch_size']) ? (int) $input['cron_batch_size'] : 50;
+    if ($batch_size < 1) {
+        $batch_size = 1;
+    } elseif ($batch_size > 200) {
+        $batch_size = 200;
+    }
+    $output['cron_batch_size'] = $batch_size;
+
+    $clear_token = !empty($input['clear_token']);
+
+    if ($clear_token) {
+        $output['access_token'] = '';
+        $output['token_last4'] = '';
+        $output['token_set_at'] = '';
+    } elseif (!empty($input['access_token'])) {
+        $token = sanitize_text_field($input['access_token']);
+        $output['access_token'] = moc_encrypt($token);
+        $output['token_last4'] = substr($token, -4);
+        $output['token_set_at'] = current_time('mysql');
+    }
+
+    moc_sync_cron_settings($settings, $output);
+
+    return $output;
+}
+
+function moc_get_settings() {
+    $settings = get_option(MOC_OPTION_KEY, []);
+    return is_array($settings) ? $settings : [];
+}
+
+function moc_get_bulk_log() {
+    $log = get_option(MOC_BULK_LOG_OPTION, []);
+    return is_array($log) ? $log : [];
+}
+
+function moc_store_bulk_log($log) {
+    update_option(MOC_BULK_LOG_OPTION, $log, false);
+}
+
+function moc_bulk_lock() {
+    return (bool) get_transient('moc_bulk_lock');
+}
+
+function moc_set_bulk_lock($ttl_seconds = 900) {
+    set_transient('moc_bulk_lock', 1, $ttl_seconds);
+}
+
+function moc_clear_bulk_lock() {
+    delete_transient('moc_bulk_lock');
+}
+
+function moc_shorten_message($message, $limit = 200) {
+    $message = (string) $message;
+    if (strlen($message) <= $limit) {
+        return $message;
+    }
+    return substr($message, 0, $limit - 3) . '...';
+}
+
+function moc_result($status, $message = '') {
+    return [
+        'status' => $status,
+        'message' => $message,
+    ];
+}
+
+function moc_get_pixel_id() {
+    $settings = moc_get_settings();
+    return !empty($settings['pixel_id']) ? $settings['pixel_id'] : '';
+}
+
+function moc_get_access_token() {
+    $settings = moc_get_settings();
+    if (empty($settings['access_token'])) {
+        return '';
+    }
+
+    return moc_decrypt($settings['access_token']);
+}
+
+function moc_get_crypto_key() {
+    $key = wp_salt('auth') . wp_salt('secure_auth');
+    return hash('sha256', $key, true);
+}
+
+function moc_encrypt($plaintext) {
+    if ($plaintext === '') {
+        return '';
+    }
+
+    if (!function_exists('openssl_encrypt')) {
+        return 'raw:' . $plaintext;
+    }
+
+    try {
+        $iv = random_bytes(16);
+    } catch (Exception $e) {
+        return 'raw:' . $plaintext;
+    }
+
+    $ciphertext = openssl_encrypt($plaintext, 'aes-256-cbc', moc_get_crypto_key(), OPENSSL_RAW_DATA, $iv);
+
+    if ($ciphertext === false) {
+        return 'raw:' . $plaintext;
+    }
+
+    return 'enc:' . base64_encode($iv . $ciphertext);
+}
+
+function moc_decrypt($stored) {
+    if ($stored === '') {
+        return '';
+    }
+
+    if (strpos($stored, 'enc:') === 0) {
+        if (!function_exists('openssl_decrypt')) {
+            return '';
+        }
+
+        $encoded = substr($stored, 4);
+        $data = base64_decode($encoded, true);
+        if ($data === false || strlen($data) <= 16) {
+            return '';
+        }
+
+        $iv = substr($data, 0, 16);
+        $ciphertext = substr($data, 16);
+        $plaintext = openssl_decrypt($ciphertext, 'aes-256-cbc', moc_get_crypto_key(), OPENSSL_RAW_DATA, $iv);
+
+        return $plaintext === false ? '' : $plaintext;
+    }
+
+    if (strpos($stored, 'raw:') === 0) {
+        return substr($stored, 4);
+    }
+
+    return $stored;
+}
+
+function moc_maybe_set_fb_cookies() {
+    if (is_admin() && !wp_doing_ajax()) {
+        return;
+    }
+
+    if (headers_sent()) {
+        return;
+    }
+
+    $expiry = time() + apply_filters('moc_cookie_expiry', 90 * DAY_IN_SECONDS);
+    $path = defined('COOKIEPATH') && COOKIEPATH ? COOKIEPATH : '/';
+    $domain = defined('COOKIE_DOMAIN') ? COOKIE_DOMAIN : '';
+    $secure = is_ssl();
+    $http_only = false;
+
+    if (isset($_GET['fbclid'])) {
+        $fbclid = sanitize_text_field(wp_unslash($_GET['fbclid']));
+        if ($fbclid !== '') {
+            $fbc = 'fb.1.' . time() . '.' . $fbclid;
+            setcookie('_fbc', $fbc, $expiry, $path, $domain, $secure, $http_only);
+            $_COOKIE['_fbc'] = $fbc;
+        }
+    } elseif (!empty($_COOKIE['_fbc'])) {
+        $fbc = sanitize_text_field(wp_unslash($_COOKIE['_fbc']));
+        setcookie('_fbc', $fbc, $expiry, $path, $domain, $secure, $http_only);
+    }
+
+    if (!empty($_COOKIE['_fbp'])) {
+        $fbp = sanitize_text_field(wp_unslash($_COOKIE['_fbp']));
+        setcookie('_fbp', $fbp, $expiry, $path, $domain, $secure, $http_only);
+    }
+}
+
+function moc_save_fb_cookies_to_order($order_id) {
+    if (isset($_COOKIE['_fbp'])) {
+        update_post_meta($order_id, '_fbp_cookie', sanitize_text_field(wp_unslash($_COOKIE['_fbp'])));
+    }
+
+    if (isset($_COOKIE['_fbc'])) {
+        update_post_meta($order_id, '_fbc_cookie', sanitize_text_field(wp_unslash($_COOKIE['_fbc'])));
+    }
+
+    if (isset($_GET['fbclid'])) {
+        update_post_meta($order_id, '_fbclid', sanitize_text_field(wp_unslash($_GET['fbclid'])));
+    }
+
+    if (!empty($_SERVER['REMOTE_ADDR'])) {
+        update_post_meta($order_id, '_client_ip', sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])));
+    }
+
+    if (!empty($_SERVER['HTTP_USER_AGENT'])) {
+        update_post_meta($order_id, '_client_user_agent', sanitize_text_field(wp_unslash($_SERVER['HTTP_USER_AGENT'])));
+    }
+}
+
+function moc_send_purchase_to_meta($order_id, $force = false) {
+    if (!$force && get_post_meta($order_id, '_meta_offline_sent', true)) {
+        return moc_result('skipped', 'already_sent');
+    }
+
+    $pixel_id = moc_get_pixel_id();
+    $access_token = moc_get_access_token();
+
+    if (empty($pixel_id) || empty($access_token)) {
+        error_log("Meta Offline: Missing Pixel ID or Access Token. Order #{$order_id} skipped.");
+        return moc_result('error', 'missing_config');
+    }
+
+    $order = wc_get_order($order_id);
+    if (!$order) {
+        error_log("Meta Offline: Order #{$order_id} not found.");
+        return moc_result('error', 'order_not_found');
+    }
+
+    $email = $order->get_billing_email();
+    if (empty($email)) {
+        error_log("Meta Offline: Order #{$order_id} has no email, skipping.");
+        return moc_result('error', 'missing_email');
+    }
+
+    $user_data = [
+        'em' => hash('sha256', strtolower(trim($email))),
+    ];
+
+    $phone = $order->get_billing_phone();
+    if (!empty($phone)) {
+        $phone_clean = preg_replace('/[^0-9]/', '', $phone);
+        if ($phone_clean !== '') {
+            $user_data['ph'] = hash('sha256', $phone_clean);
+        }
+    }
+
+    $first_name = $order->get_billing_first_name();
+    if (!empty($first_name)) {
+        $user_data['fn'] = hash('sha256', strtolower(trim($first_name)));
+    }
+
+    $last_name = $order->get_billing_last_name();
+    if (!empty($last_name)) {
+        $user_data['ln'] = hash('sha256', strtolower(trim($last_name)));
+    }
+
+    $city = $order->get_billing_city();
+    if (!empty($city)) {
+        $user_data['ct'] = hash('sha256', strtolower(trim($city)));
+    }
+
+    $state = $order->get_billing_state();
+    if (!empty($state)) {
+        $user_data['st'] = hash('sha256', strtolower(trim($state)));
+    }
+
+    $postcode = $order->get_billing_postcode();
+    if (!empty($postcode)) {
+        $user_data['zp'] = hash('sha256', trim($postcode));
+    }
+
+    $country = $order->get_billing_country();
+    if (!empty($country)) {
+        $user_data['country'] = hash('sha256', strtolower($country));
+    }
+
+    $fbp = get_post_meta($order_id, '_fbp_cookie', true);
+    if (!empty($fbp)) {
+        $user_data['fbp'] = $fbp;
+    }
+
+    $fbc = get_post_meta($order_id, '_fbc_cookie', true);
+    if (empty($fbc)) {
+        $fbclid = get_post_meta($order_id, '_fbclid', true);
+        if (!empty($fbclid)) {
+            $fbc = 'fb.1.' . time() . '.' . $fbclid;
+        }
+    }
+    if (!empty($fbc)) {
+        $user_data['fbc'] = $fbc;
+    }
+
+    $client_ip = get_post_meta($order_id, '_client_ip', true);
+    if (!empty($client_ip)) {
+        $user_data['client_ip_address'] = $client_ip;
+    }
+
+    $user_agent = get_post_meta($order_id, '_client_user_agent', true);
+    if (!empty($user_agent)) {
+        $user_data['client_user_agent'] = $user_agent;
+    }
+
+    $content_ids = [];
+    $contents = [];
+    foreach ($order->get_items() as $item) {
+        $product_id = $item->get_product_id();
+        $content_ids[] = (string) $product_id;
+        $contents[] = [
+            'id' => (string) $product_id,
+            'quantity' => $item->get_quantity(),
+        ];
+    }
+
+    $custom_data = [
+        'value' => (float) $order->get_total(),
+        'currency' => $order->get_currency(),
+        'content_type' => 'product',
+        'content_ids' => $content_ids,
+        'contents' => $contents,
+        'num_items' => $order->get_item_count(),
+    ];
+
+    $event_time_obj = $order->get_date_completed() ? $order->get_date_completed() : $order->get_date_created();
+    $event_time = $event_time_obj ? $event_time_obj->getTimestamp() : time();
+    $event_source_url = $order->get_checkout_order_received_url();
+    if (empty($event_source_url)) {
+        $event_source_url = home_url('/');
+    }
+
+    $event_data = [
+        'event_name' => 'Purchase',
+        'event_time' => $event_time,
+        'event_id' => (string) $order_id,
+        'action_source' => 'website',
+        'event_source_url' => $event_source_url,
+        'user_data' => $user_data,
+        'custom_data' => $custom_data,
+    ];
+
+    $api_version = apply_filters('moc_meta_api_version', 'v21.0');
+    $endpoint = 'https://graph.facebook.com/' . $api_version . '/' . rawurlencode($pixel_id) . '/events';
+
+    $response = wp_remote_post(
+        $endpoint,
+        [
+            'body' => wp_json_encode([
+                'data' => [$event_data],
+                'access_token' => $access_token,
+            ]),
+            'headers' => [
+                'Content-Type' => 'application/json',
+            ],
+            'timeout' => 30,
+        ]
+    );
+
+    if (is_wp_error($response)) {
+        error_log("Meta Offline Error (Order #{$order_id}): " . $response->get_error_message());
+        return moc_result('error', moc_shorten_message($response->get_error_message()));
+    }
+
+    $status_code = wp_remote_retrieve_response_code($response);
+    $body = wp_remote_retrieve_body($response);
+
+    if ($status_code === 200) {
+        $response_data = json_decode($body, true);
+        if (isset($response_data['events_received']) && $response_data['events_received'] > 0) {
+            update_post_meta($order_id, '_meta_offline_sent', current_time('mysql'));
+            return moc_result('sent', 'events_received:' . (int) $response_data['events_received']);
+        }
+    }
+
+    error_log("Meta Offline Response (Order #{$order_id}): Status {$status_code} - {$body}");
+    $message = 'http_' . $status_code . ': ' . moc_shorten_message($body);
+    return moc_result('error', $message);
+}
+
+function moc_send_past_orders_to_meta_bulk($limit = 50, $trigger = 'manual') {
+    if (moc_bulk_lock()) {
+        return [
+            'locked' => true,
+            'total' => 0,
+            'sent' => 0,
+            'errors' => 0,
+            'skipped' => 0,
+            'items' => [],
+        ];
+    }
+
+    moc_set_bulk_lock();
+
+    $args = [
+        'status' => 'completed',
+        'limit' => $limit,
+        'orderby' => 'date',
+        'order' => 'DESC',
+        'meta_query' => [
+            [
+                'key' => '_meta_offline_sent',
+                'compare' => 'NOT EXISTS',
+            ],
+        ],
+    ];
+
+    $orders = wc_get_orders($args);
+
+    $total = count($orders);
+    $sent = 0;
+    $errors = 0;
+    $skipped = 0;
+    $items = [];
+
+    $sleep_ms = (int) apply_filters('moc_bulk_sleep_ms', 250);
+    $max_items = (int) apply_filters('moc_bulk_log_max_items', 200);
+
+    foreach ($orders as $order) {
+        $result = moc_send_purchase_to_meta($order->get_id());
+        $status = isset($result['status']) ? $result['status'] : 'error';
+        $message = isset($result['message']) ? $result['message'] : '';
+
+        if ($status === 'sent') {
+            $sent++;
+        } elseif ($status === 'skipped') {
+            $skipped++;
+        } else {
+            $errors++;
+        }
+
+        if (count($items) < $max_items) {
+            $items[] = [
+                'order_id' => $order->get_id(),
+                'status' => $status,
+                'message' => moc_shorten_message($message),
+            ];
+        }
+
+        if ($sleep_ms > 0) {
+            usleep($sleep_ms * 1000);
+        }
+    }
+
+    $log = [
+        'run_at' => current_time('mysql'),
+        'trigger' => $trigger,
+        'total' => $total,
+        'sent' => $sent,
+        'errors' => $errors,
+        'skipped' => $skipped,
+        'items' => $items,
+    ];
+
+    moc_store_bulk_log($log);
+    moc_clear_bulk_lock();
+
+    return $log;
+}
+
+function moc_cron_send_past_orders() {
+    if (!class_exists('WooCommerce')) {
+        return;
+    }
+
+    $settings = moc_get_settings();
+    if (empty($settings['enable_cron'])) {
+        return;
+    }
+
+    $limit = !empty($settings['cron_batch_size']) ? (int) $settings['cron_batch_size'] : 50;
+    if ($limit < 1) {
+        $limit = 1;
+    } elseif ($limit > 200) {
+        $limit = 200;
+    }
+
+    $result = moc_send_past_orders_to_meta_bulk($limit, 'cron');
+    if (!empty($result['locked'])) {
+        return;
+    }
+}
+
+function moc_handle_send_past_orders() {
+    if (!current_user_can(MOC_CAPABILITY)) {
+        wp_die(esc_html__('Insufficient permissions.', 'meta-offline-conversions'));
+    }
+
+    check_admin_referer('moc_send_past_orders');
+
+    $limit = isset($_POST['limit']) ? intval($_POST['limit']) : 50;
+    if ($limit < 1) {
+        $limit = 1;
+    } elseif ($limit > 200) {
+        $limit = 200;
+    }
+
+    $result = moc_send_past_orders_to_meta_bulk($limit, 'manual');
+
+    if (!empty($result['locked'])) {
+        $redirect = add_query_arg(
+            [
+                'page' => 'moc-settings',
+                'moc_bulk_locked' => 1,
+            ],
+            admin_url('admin.php')
+        );
+        wp_safe_redirect($redirect);
+        exit;
+    }
+
+    $redirect = add_query_arg(
+        [
+            'page' => 'moc-settings',
+            'moc_bulk_sent' => isset($result['sent']) ? $result['sent'] : 0,
+            'moc_bulk_total' => isset($result['total']) ? $result['total'] : 0,
+            'moc_bulk_errors' => isset($result['errors']) ? $result['errors'] : 0,
+            'moc_bulk_skipped' => isset($result['skipped']) ? $result['skipped'] : 0,
+        ],
+        admin_url('admin.php')
+    );
+
+    wp_safe_redirect($redirect);
+    exit;
+}
