@@ -20,17 +20,23 @@ if [[ ! -f "$PLUGIN_FILE" ]]; then
   exit 1
 fi
 
-python3 - <<PY
+VERSION="$VERSION" PLUGIN_FILE="$PLUGIN_FILE" python3 - <<'PY'
 import re
 from pathlib import Path
+import os
 
-path = Path(r"$PLUGIN_FILE")
+path = Path(os.environ.get("PLUGIN_FILE", ""))
+version = os.environ.get("VERSION", "").strip()
+if not version:
+    raise SystemExit("VERSION env is empty")
+if not path:
+    raise SystemExit("PLUGIN_FILE env is empty")
 text = path.read_text()
 
 # Update header version
-text_new, count1 = re.subn(r"(?m)^\s*\*\s*Version:\s*\S+\s*$", f" * Version: {VERSION}", text)
+text_new, count1 = re.subn(r"(?m)^\s*\*\s*Version:\s*\S+\s*$", f" * Version: {version}", text)
 # Update constant
-text_new, count2 = re.subn(r"(?m)^define\('MOC_VERSION',\s*'[^']+'\);", f"define('MOC_VERSION', '{VERSION}');", text_new)
+text_new, count2 = re.subn(r"(?m)^define\('MOC_VERSION',\s*'[^']+'\);", f"define('MOC_VERSION', '{version}');", text_new)
 
 if count1 == 0:
     raise SystemExit("Version header not found")
@@ -38,7 +44,7 @@ if count2 == 0:
     raise SystemExit("MOC_VERSION constant not found")
 
 path.write_text(text_new)
-print(f"Updated version to {VERSION}")
+print(f"Updated version to {version}")
 PY
 
 if $TAG; then

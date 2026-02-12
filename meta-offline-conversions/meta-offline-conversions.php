@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Meta Offline Conversions for WooCommerce
  * Description: Automatically sends WooCommerce Purchase events to the Meta Conversions API and stores FBP/FBC cookies on orders.
- * Version: 1.0.0
- * Author: Your Name
+ * Version: 1.0.1
+ * Author: Lapos László
  * Text Domain: meta-offline-conversions
  * Plugin URI: https://github.com/laposlaszlo/WC_Meta_Offline_conversions
  */
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MOC_VERSION', '1.0.0');
+define('MOC_VERSION', '1.0.1');
 define('MOC_OPTION_KEY', 'moc_settings');
 define('MOC_CAPABILITY', 'manage_woocommerce');
 define('MOC_CRON_HOOK', 'moc_cron_send_past_orders');
@@ -268,6 +268,7 @@ function moc_render_settings_page() {
     $pixel_id = isset($settings['pixel_id']) ? $settings['pixel_id'] : '';
     $token_last4 = isset($settings['token_last4']) ? $settings['token_last4'] : '';
     $token_hint = $token_last4 ? '****' . $token_last4 : __('not set', 'meta-offline-conversions');
+    $debug_log = !empty($settings['debug_log']);
     $enable_cron = !empty($settings['enable_cron']);
     $cron_interval = !empty($settings['cron_interval']) ? $settings['cron_interval'] : 'hourly';
     $cron_batch_size = !empty($settings['cron_batch_size']) ? (int) $settings['cron_batch_size'] : 50;
@@ -291,6 +292,12 @@ function moc_render_settings_page() {
     echo '<input type="password" name="' . esc_attr(MOC_OPTION_KEY) . '[access_token]" value="" class="regular-text" autocomplete="new-password" />';
     echo '<p class="description">' . sprintf(esc_html__('Leave blank to keep existing token. Current: %s', 'meta-offline-conversions'), esc_html($token_hint)) . '</p>';
     echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[clear_token]" value="1" /> ' . esc_html__('Clear stored token', 'meta-offline-conversions') . '</label>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Debug Logging', 'meta-offline-conversions') . '</th><td>';
+    echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[debug_log]" value="1" ' . checked($debug_log, true, false) . ' /> ';
+    echo esc_html__('Enable verbose logs for testing', 'meta-offline-conversions') . '</label>';
+    echo '<p class="description">' . esc_html__('Logs are written to WooCommerce logs and PHP error log while enabled.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Auto Backfill (WP-Cron)', 'meta-offline-conversions') . '</th><td>';
@@ -383,6 +390,8 @@ function moc_sanitize_settings($input) {
     $pixel_id = isset($input['pixel_id']) ? sanitize_text_field($input['pixel_id']) : '';
     $output['pixel_id'] = $pixel_id;
 
+    $output['debug_log'] = !empty($input['debug_log']) ? 1 : 0;
+
     $output['enable_cron'] = !empty($input['enable_cron']) ? 1 : 0;
     $interval = isset($input['cron_interval']) ? sanitize_text_field($input['cron_interval']) : 'hourly';
     if (!moc_is_valid_cron_interval($interval)) {
@@ -419,6 +428,28 @@ function moc_sanitize_settings($input) {
 function moc_get_settings() {
     $settings = get_option(MOC_OPTION_KEY, []);
     return is_array($settings) ? $settings : [];
+}
+
+function moc_debug_enabled() {
+    $settings = moc_get_settings();
+    return !empty($settings['debug_log']);
+}
+
+function moc_log($message, $level = 'info', $context = []) {
+    $message = '[Meta Offline] ' . $message;
+
+    if ($level === 'debug' && !moc_debug_enabled()) {
+        return;
+    }
+
+    if (function_exists('wc_get_logger')) {
+        $logger = wc_get_logger();
+        $logger->log($level, $message, array_merge(['source' => 'meta-offline-conversions'], (array) $context));
+    }
+
+    if (moc_debug_enabled() || $level !== 'debug') {
+        error_log($message);
+    }
 }
 
 function moc_get_bulk_log() {
@@ -587,6 +618,7 @@ function moc_save_fb_cookies_to_order($order_id) {
 
 function moc_send_purchase_to_meta($order_id, $force = false) {
     if (!$force && get_post_meta($order_id, '_meta_offline_sent', true)) {
+        moc_log("Order #{$order_id} already sent, skipping.", 'debug');
         return moc_result('skipped', 'already_sent');
     }
 
@@ -594,19 +626,19 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
     $access_token = moc_get_access_token();
 
     if (empty($pixel_id) || empty($access_token)) {
-        error_log("Meta Offline: Missing Pixel ID or Access Token. Order #{$order_id} skipped.");
+        moc_log("Missing Pixel ID or Access Token. Order #{$order_id} skipped.", 'error');
         return moc_result('error', 'missing_config');
     }
 
     $order = wc_get_order($order_id);
     if (!$order) {
-        error_log("Meta Offline: Order #{$order_id} not found.");
+        moc_log("Order #{$order_id} not found.", 'error');
         return moc_result('error', 'order_not_found');
     }
 
     $email = $order->get_billing_email();
     if (empty($email)) {
-        error_log("Meta Offline: Order #{$order_id} has no email, skipping.");
+        moc_log("Order #{$order_id} has no email, skipping.", 'error');
         return moc_result('error', 'missing_email');
     }
 
@@ -718,6 +750,8 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
     $api_version = apply_filters('moc_meta_api_version', 'v21.0');
     $endpoint = 'https://graph.facebook.com/' . $api_version . '/' . rawurlencode($pixel_id) . '/events';
 
+    moc_log("Sending Purchase event for order #{$order_id} to {$endpoint}.", 'debug');
+
     $response = wp_remote_post(
         $endpoint,
         [
@@ -733,7 +767,7 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
     );
 
     if (is_wp_error($response)) {
-        error_log("Meta Offline Error (Order #{$order_id}): " . $response->get_error_message());
+        moc_log("Meta Offline Error (Order #{$order_id}): " . $response->get_error_message(), 'error');
         return moc_result('error', moc_shorten_message($response->get_error_message()));
     }
 
@@ -744,11 +778,12 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
         $response_data = json_decode($body, true);
         if (isset($response_data['events_received']) && $response_data['events_received'] > 0) {
             update_post_meta($order_id, '_meta_offline_sent', current_time('mysql'));
+            moc_log("Meta response 200 OK for order #{$order_id}. events_received=" . (int) $response_data['events_received'], 'debug');
             return moc_result('sent', 'events_received:' . (int) $response_data['events_received']);
         }
     }
 
-    error_log("Meta Offline Response (Order #{$order_id}): Status {$status_code} - {$body}");
+    moc_log("Meta Offline Response (Order #{$order_id}): Status {$status_code} - " . moc_shorten_message($body, 500), 'error');
     $message = 'http_' . $status_code . ': ' . moc_shorten_message($body);
     return moc_result('error', $message);
 }
