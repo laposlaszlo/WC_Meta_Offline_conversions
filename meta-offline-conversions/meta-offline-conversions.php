@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Meta Offline Conversions for WooCommerce
  * Description: Automatically sends WooCommerce Purchase events to the Meta Conversions API and stores FBP/FBC cookies on orders.
- * Version: 1.0.4
+ * Version: 1.0.5
  * Author: Lapos László
  * Text Domain: meta-offline-conversions
  * Plugin URI: https://github.com/laposlaszlo/WC_Meta_Offline_conversions
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MOC_VERSION', '1.0.4');
+define('MOC_VERSION', '1.0.5');
 define('MOC_OPTION_KEY', 'moc_settings');
 define('MOC_CAPABILITY', 'manage_woocommerce');
 define('MOC_CRON_HOOK', 'moc_cron_send_past_orders');
@@ -132,6 +132,8 @@ function moc_init() {
     add_action('init', 'moc_maybe_set_fb_cookies', 1);
     add_action('woocommerce_checkout_order_processed', 'moc_save_fb_cookies_to_order', 10, 1);
     add_action('woocommerce_order_status_completed', 'moc_send_purchase_to_meta', 10, 1);
+    add_action('woocommerce_order_status_on-hold', 'moc_send_purchase_to_meta_cheque_test', 10, 1);
+    add_action('woocommerce_order_status_processing', 'moc_send_purchase_to_meta_cheque_test', 10, 1);
     add_action('init', 'moc_ensure_cron_scheduled', 5);
 }
 
@@ -277,6 +279,7 @@ function moc_render_settings_page() {
     $token_last4 = isset($settings['token_last4']) ? $settings['token_last4'] : '';
     $token_hint = $token_last4 ? '****' . $token_last4 : __('not set', 'meta-offline-conversions');
     $debug_log = !empty($settings['debug_log']);
+    $cheque_test_mode = !empty($settings['cheque_test_mode']);
     $enable_cron = !empty($settings['enable_cron']);
     $cron_interval = !empty($settings['cron_interval']) ? $settings['cron_interval'] : 'hourly';
     $cron_batch_size = !empty($settings['cron_batch_size']) ? (int) $settings['cron_batch_size'] : 50;
@@ -306,6 +309,12 @@ function moc_render_settings_page() {
     echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[debug_log]" value="1" ' . checked($debug_log, true, false) . ' /> ';
     echo esc_html__('Enable verbose logs for testing', 'meta-offline-conversions') . '</label>';
     echo '<p class="description">' . esc_html__('Logs are written to WooCommerce logs, PHP error log, and shown below in Event Log while enabled.', 'meta-offline-conversions') . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Cheque Test Mode', 'meta-offline-conversions') . '</th><td>';
+    echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[cheque_test_mode]" value="1" ' . checked($cheque_test_mode, true, false) . ' /> ';
+    echo esc_html__('Send Purchase event for cheque orders on On hold/Processing status (testing only)', 'meta-offline-conversions') . '</label>';
+    echo '<p class="description">' . esc_html__('Use this to test on live shop without switching to Completed status. Disable after testing.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Auto Backfill (WP-Cron)', 'meta-offline-conversions') . '</th><td>';
@@ -449,6 +458,7 @@ function moc_sanitize_settings($input) {
     $output['pixel_id'] = $pixel_id;
 
     $output['debug_log'] = !empty($input['debug_log']) ? 1 : 0;
+    $output['cheque_test_mode'] = !empty($input['cheque_test_mode']) ? 1 : 0;
 
     $output['enable_cron'] = !empty($input['enable_cron']) ? 1 : 0;
     $interval = isset($input['cron_interval']) ? sanitize_text_field($input['cron_interval']) : 'hourly';
@@ -491,6 +501,30 @@ function moc_get_settings() {
 function moc_debug_enabled() {
     $settings = moc_get_settings();
     return !empty($settings['debug_log']);
+}
+
+function moc_cheque_test_mode_enabled() {
+    $settings = moc_get_settings();
+    return !empty($settings['cheque_test_mode']);
+}
+
+function moc_send_purchase_to_meta_cheque_test($order_id) {
+    if (!moc_cheque_test_mode_enabled()) {
+        return;
+    }
+
+    $order = wc_get_order($order_id);
+    if (!$order) {
+        moc_log("Cheque test mode: order #{$order_id} not found.", 'error');
+        return;
+    }
+
+    if ($order->get_payment_method() !== 'cheque') {
+        return;
+    }
+
+    moc_log("Cheque test mode: sending order #{$order_id} on status '{$order->get_status()}'.", 'info');
+    moc_send_purchase_to_meta($order_id, false);
 }
 
 function moc_get_admin_log() {
