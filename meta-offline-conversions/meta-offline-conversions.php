@@ -280,6 +280,7 @@ function moc_render_settings_page() {
     $token_hint = $token_last4 ? '****' . $token_last4 : __('not set', 'meta-offline-conversions');
     $debug_log = !empty($settings['debug_log']);
     $cheque_test_mode = !empty($settings['cheque_test_mode']);
+    $event_name = !empty($settings['event_name']) ? $settings['event_name'] : 'Purchase';
     $enable_cron = !empty($settings['enable_cron']);
     $cron_interval = !empty($settings['cron_interval']) ? $settings['cron_interval'] : 'hourly';
     $cron_batch_size = !empty($settings['cron_batch_size']) ? (int) $settings['cron_batch_size'] : 50;
@@ -315,6 +316,11 @@ function moc_render_settings_page() {
     echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[cheque_test_mode]" value="1" ' . checked($cheque_test_mode, true, false) . ' /> ';
     echo esc_html__('Send Purchase event for cheque orders on On hold/Processing status (testing only)', 'meta-offline-conversions') . '</label>';
     echo '<p class="description">' . esc_html__('Use this to test on live shop without switching to Completed status. Disable after testing.', 'meta-offline-conversions') . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Event Name', 'meta-offline-conversions') . '</th><td>';
+    echo '<input type="text" name="' . esc_attr(MOC_OPTION_KEY) . '[event_name]" value="' . esc_attr($event_name) . '" class="regular-text" />';
+    echo '<p class="description">' . esc_html__('Meta event name to send (default: Purchase). Other options: CompleteRegistration, AddToCart, InitiateCheckout, etc.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Auto Backfill (WP-Cron)', 'meta-offline-conversions') . '</th><td>';
@@ -459,6 +465,12 @@ function moc_sanitize_settings($input) {
 
     $output['debug_log'] = !empty($input['debug_log']) ? 1 : 0;
     $output['cheque_test_mode'] = !empty($input['cheque_test_mode']) ? 1 : 0;
+
+    $event_name = isset($input['event_name']) ? sanitize_text_field($input['event_name']) : 'Purchase';
+    if (empty($event_name)) {
+        $event_name = 'Purchase';
+    }
+    $output['event_name'] = $event_name;
 
     $output['enable_cron'] = !empty($input['enable_cron']) ? 1 : 0;
     $interval = isset($input['cron_interval']) ? sanitize_text_field($input['cron_interval']) : 'hourly';
@@ -878,8 +890,11 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
         $event_source_url = home_url('/');
     }
 
+    $settings = moc_get_settings();
+    $event_name = !empty($settings['event_name']) ? $settings['event_name'] : 'Purchase';
+
     $event_data = [
-        'event_name' => 'PuuraComplete',
+        'event_name' => $event_name,
         'event_time' => $event_time,
         'event_id' => (string) $order_id,
         'action_source' => 'website',
@@ -891,7 +906,7 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
     $api_version = apply_filters('moc_meta_api_version', 'v21.0');
     $endpoint = 'https://graph.facebook.com/' . $api_version . '/' . rawurlencode($pixel_id) . '/events';
 
-    moc_log("Sending Purchase event for order #{$order_id} to {$endpoint}.", 'debug');
+    moc_log("Sending {$event_name} event for order #{$order_id} to {$endpoint}.", 'debug');
 
     $response = wp_remote_post(
         $endpoint,
