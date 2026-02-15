@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-02-15
+- No notable changes
+
 ## [1.0.5] - 2026-02-12
 - Add a toggleable admin setting for cheque test mode.
 - When enabled, send Purchase events for cheque orders on `on-hold` and `processing` statuses.
