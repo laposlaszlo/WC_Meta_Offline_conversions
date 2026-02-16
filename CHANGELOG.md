@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-02-16
+- Add EU Compliant Mode for Meta policy compliance with health/medical content
+
 ## [1.0.8] - 2026-02-16
 - Add Minimal Data Mode to avoid Meta policy violations with health/medical products
 
