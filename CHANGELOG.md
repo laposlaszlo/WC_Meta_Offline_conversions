@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-02-16
+- Add Minimal Data Mode to avoid Meta policy violations with health/medical products
+
 ## [1.0.7] - 2026-02-16
 - Log full JSON response from Meta API for better debugging
 - Add configurable event name setting in admin panel
