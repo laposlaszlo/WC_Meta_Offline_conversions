@@ -934,7 +934,7 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
         $response_data = json_decode($body, true);
         if (isset($response_data['events_received']) && $response_data['events_received'] > 0) {
             update_post_meta($order_id, '_meta_offline_sent', current_time('mysql'));
-            moc_log("Meta response 200 OK for order #{$order_id}. events_received=" . (int) $response_data['events_received'], 'debug');
+            moc_log("Meta response 200 OK for order #{$order_id}. Full response: " . $body, 'debug');
             return moc_result('sent', 'events_received:' . (int) $response_data['events_received']);
         }
     }
