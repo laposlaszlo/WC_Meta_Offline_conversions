@@ -282,6 +282,7 @@ function moc_render_settings_page() {
     $cheque_test_mode = !empty($settings['cheque_test_mode']);
     $event_name = !empty($settings['event_name']) ? $settings['event_name'] : 'Purchase';
     $minimal_data_mode = !empty($settings['minimal_data_mode']);
+    $eu_compliant_mode = !empty($settings['eu_compliant_mode']);
     $enable_cron = !empty($settings['enable_cron']);
     $cron_interval = !empty($settings['cron_interval']) ? $settings['cron_interval'] : 'hourly';
     $cron_batch_size = !empty($settings['cron_batch_size']) ? (int) $settings['cron_batch_size'] : 50;
@@ -328,6 +329,13 @@ function moc_render_settings_page() {
     echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[minimal_data_mode]" value="1" ' . checked($minimal_data_mode, true, false) . ' /> ';
     echo esc_html__('Send only value and currency (no product details)', 'meta-offline-conversions') . '</label>';
     echo '<p class="description">' . esc_html__('Enable if your products contain health/medical terms that may cause policy violations. Only order total and currency will be sent.', 'meta-offline-conversions') . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('EU Compliant Mode', 'meta-offline-conversions') . '</th><td>';
+    echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[eu_compliant_mode]" value="1" ' . checked($eu_compliant_mode, true, false) . ' /> ';
+    echo esc_html__('EU compliance mode (recommended for health/medical products)', 'meta-offline-conversions') . '</label>';
+    echo '<p class="description"><strong>' . esc_html__('Enable this if Meta blocked your website for health-related content.', 'meta-offline-conversions') . '</strong><br />';
+    echo esc_html__('Removes: product IDs, Facebook cookies (fbp/fbc), and specific event URLs to comply with EU regulations.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Auto Backfill (WP-Cron)', 'meta-offline-conversions') . '</th><td>';
@@ -480,6 +488,7 @@ function moc_sanitize_settings($input) {
     $output['event_name'] = $event_name;
 
     $output['minimal_data_mode'] = !empty($input['minimal_data_mode']) ? 1 : 0;
+    $output['eu_compliant_mode'] = !empty($input['eu_compliant_mode']) ? 1 : 0;
 
     $output['enable_cron'] = !empty($input['enable_cron']) ? 1 : 0;
     $interval = isset($input['cron_interval']) ? sanitize_text_field($input['cron_interval']) : 'hourly';
@@ -846,20 +855,29 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
         $user_data['country'] = hash('sha256', strtolower($country));
     }
 
-    $fbp = get_post_meta($order_id, '_fbp_cookie', true);
-    if (!empty($fbp)) {
-        $user_data['fbp'] = $fbp;
-    }
+    $settings = moc_get_settings();
+    $eu_compliant_mode = !empty($settings['eu_compliant_mode']);
 
-    $fbc = get_post_meta($order_id, '_fbc_cookie', true);
-    if (empty($fbc)) {
-        $fbclid = get_post_meta($order_id, '_fbclid', true);
-        if (!empty($fbclid)) {
-            $fbc = 'fb.1.' . time() . '.' . $fbclid;
+    // FBP cookie - skip in EU compliant mode
+    if (!$eu_compliant_mode) {
+        $fbp = get_post_meta($order_id, '_fbp_cookie', true);
+        if (!empty($fbp)) {
+            $user_data['fbp'] = $fbp;
         }
     }
-    if (!empty($fbc)) {
-        $user_data['fbc'] = $fbc;
+
+    // FBC cookie - skip in EU compliant mode
+    if (!$eu_compliant_mode) {
+        $fbc = get_post_meta($order_id, '_fbc_cookie', true);
+        if (empty($fbc)) {
+            $fbclid = get_post_meta($order_id, '_fbclid', true);
+            if (!empty($fbclid)) {
+                $fbc = 'fb.1.' . time() . '.' . $fbclid;
+            }
+        }
+        if (!empty($fbc)) {
+            $user_data['fbc'] = $fbc;
+        }
     }
 
     $client_ip = get_post_meta($order_id, '_client_ip', true);
@@ -906,8 +924,14 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
 
     $event_time_obj = $order->get_date_completed() ? $order->get_date_completed() : $order->get_date_created();
     $event_time = $event_time_obj ? $event_time_obj->getTimestamp() : time();
-    $event_source_url = $order->get_checkout_order_received_url();
-    if (empty($event_source_url)) {
+    
+    // Event source URL - use generic home URL in EU compliant mode
+    if (!$eu_compliant_mode) {
+        $event_source_url = $order->get_checkout_order_received_url();
+        if (empty($event_source_url)) {
+            $event_source_url = home_url('/');
+        }
+    } else {
         $event_source_url = home_url('/');
     }
 
