@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-02-16
+- Log full JSON response from Meta API for better debugging
+- Add configurable event name setting in admin panel
+
 ## [1.0.6] - 2026-02-15
 - No notable changes
 
