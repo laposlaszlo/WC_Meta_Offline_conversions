@@ -281,6 +281,7 @@ function moc_render_settings_page() {
     $debug_log = !empty($settings['debug_log']);
     $cheque_test_mode = !empty($settings['cheque_test_mode']);
     $event_name = !empty($settings['event_name']) ? $settings['event_name'] : 'Purchase';
+    $minimal_data_mode = !empty($settings['minimal_data_mode']);
     $enable_cron = !empty($settings['enable_cron']);
     $cron_interval = !empty($settings['cron_interval']) ? $settings['cron_interval'] : 'hourly';
     $cron_batch_size = !empty($settings['cron_batch_size']) ? (int) $settings['cron_batch_size'] : 50;
@@ -321,6 +322,12 @@ function moc_render_settings_page() {
     echo '<tr><th scope="row">' . esc_html__('Event Name', 'meta-offline-conversions') . '</th><td>';
     echo '<input type="text" name="' . esc_attr(MOC_OPTION_KEY) . '[event_name]" value="' . esc_attr($event_name) . '" class="regular-text" />';
     echo '<p class="description">' . esc_html__('Meta event name to send (default: Purchase). Other options: CompleteRegistration, AddToCart, InitiateCheckout, etc.', 'meta-offline-conversions') . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Minimal Data Mode', 'meta-offline-conversions') . '</th><td>';
+    echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[minimal_data_mode]" value="1" ' . checked($minimal_data_mode, true, false) . ' /> ';
+    echo esc_html__('Send only value and currency (no product details)', 'meta-offline-conversions') . '</label>';
+    echo '<p class="description">' . esc_html__('Enable if your products contain health/medical terms that may cause policy violations. Only order total and currency will be sent.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Auto Backfill (WP-Cron)', 'meta-offline-conversions') . '</th><td>';
@@ -471,6 +478,8 @@ function moc_sanitize_settings($input) {
         $event_name = 'Purchase';
     }
     $output['event_name'] = $event_name;
+
+    $output['minimal_data_mode'] = !empty($input['minimal_data_mode']) ? 1 : 0;
 
     $output['enable_cron'] = !empty($input['enable_cron']) ? 1 : 0;
     $interval = isset($input['cron_interval']) ? sanitize_text_field($input['cron_interval']) : 'hourly';
@@ -863,25 +872,37 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
         $user_data['client_user_agent'] = $user_agent;
     }
 
-    $content_ids = [];
-    $contents = [];
-    foreach ($order->get_items() as $item) {
-        $product_id = $item->get_product_id();
-        $content_ids[] = (string) $product_id;
-        $contents[] = [
-            'id' => (string) $product_id,
-            'quantity' => $item->get_quantity(),
+    $settings = moc_get_settings();
+    $minimal_data_mode = !empty($settings['minimal_data_mode']);
+
+    if ($minimal_data_mode) {
+        // Minimal mode: only value and currency to avoid policy violations
+        $custom_data = [
+            'value' => (float) $order->get_total(),
+            'currency' => $order->get_currency(),
+        ];
+    } else {
+        // Normal mode: include product information
+        $content_ids = [];
+        $contents = [];
+        foreach ($order->get_items() as $item) {
+            $product_id = $item->get_product_id();
+            $content_ids[] = (string) $product_id;
+            $contents[] = [
+                'id' => (string) $product_id,
+                'quantity' => $item->get_quantity(),
+            ];
+        }
+
+        $custom_data = [
+            'value' => (float) $order->get_total(),
+            'currency' => $order->get_currency(),
+            'content_type' => 'product',
+            'content_ids' => $content_ids,
+            'contents' => $contents,
+            'num_items' => $order->get_item_count(),
         ];
     }
-
-    $custom_data = [
-        'value' => (float) $order->get_total(),
-        'currency' => $order->get_currency(),
-        'content_type' => 'product',
-        'content_ids' => $content_ids,
-        'contents' => $contents,
-        'num_items' => $order->get_item_count(),
-    ];
 
     $event_time_obj = $order->get_date_completed() ? $order->get_date_completed() : $order->get_date_created();
     $event_time = $event_time_obj ? $event_time_obj->getTimestamp() : time();
