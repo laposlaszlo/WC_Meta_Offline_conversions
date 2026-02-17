@@ -4,8 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [1.0.11] - 2026-02-17
+## [1.0.12] - 2026-02-17
 - No notable changes
+
+## [1.0.12] - 2026-02-17
+- EU Compliant Mode now completely removes event_source_url from API payload
+- Improved privacy compliance by not sending any URL in EU mode
 
 ## [1.0.11] - 2026-02-17
 - Add Test Event Code configuration for Meta Events Manager integration

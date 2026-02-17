@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Meta Offline Conversions for WooCommerce
  * Description: Automatically sends WooCommerce Purchase events to the Meta Conversions API and stores FBP/FBC cookies on orders.
- * Version: 1.0.11
+ * Version: 1.0.12
  * Author: Lapos László
  * Text Domain: meta-offline-conversions
  * Plugin URI: https://github.com/laposlaszlo/WC_Meta_Offline_conversions
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MOC_VERSION', '1.0.11');
+define('MOC_VERSION', '1.0.12');
 define('MOC_OPTION_KEY', 'moc_settings');
 define('MOC_CAPABILITY', 'manage_woocommerce');
 define('MOC_CRON_HOOK', 'moc_cron_send_past_orders');
@@ -349,7 +349,7 @@ function moc_render_settings_page() {
     echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[eu_compliant_mode]" value="1" ' . checked($eu_compliant_mode, true, false) . ' /> ';
     echo esc_html__('EU compliance mode (recommended for health/medical products)', 'meta-offline-conversions') . '</label>';
     echo '<p class="description"><strong>' . esc_html__('Enable this if Meta blocked your website for health-related content.', 'meta-offline-conversions') . '</strong><br />';
-    echo esc_html__('Removes: product IDs, Facebook cookies (fbp/fbc), and specific event URLs to comply with EU regulations.', 'meta-offline-conversions') . '</p>';
+    echo esc_html__('Removes: product IDs, Facebook cookies (fbp/fbc), and event_source_url to comply with EU regulations.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Log Request Payload', 'meta-offline-conversions') . '</th><td>';
@@ -988,26 +988,27 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
     $event_time_obj = $order->get_date_completed() ? $order->get_date_completed() : $order->get_date_created();
     $event_time = $event_time_obj ? $event_time_obj->getTimestamp() : time();
     
-    // Event source URL - use generic home URL in EU compliant mode
-    if (!$eu_compliant_mode) {
-        $event_source_url = $order->get_checkout_order_received_url();
-        if (empty($event_source_url)) {
-            $event_source_url = home_url('/');
-        }
-    } else {
-        $event_source_url = home_url('/');
-    }
-
     $settings = moc_get_settings();
     $event_name = !empty($settings['event_name']) ? $settings['event_name'] : 'Purchase';
 
+    // Build base event data
     $event_data = [
         'event_name' => $event_name,
         'event_time' => $event_time,
         'event_id' => (string) $order_id,
         'action_source' => 'website',
-        'event_source_url' => $event_source_url,
         'user_data' => $user_data,
+        'custom_data' => $custom_data,
+    ];
+
+    // Add event_source_url only if NOT in EU compliant mode
+    if (!$eu_compliant_mode) {
+        $event_source_url = $order->get_checkout_order_received_url();
+        if (empty($event_source_url)) {
+            $event_source_url = home_url('/');
+        }
+        $event_data['event_source_url'] = $event_source_url;
+    }
         'custom_data' => $custom_data,
     ];
 
