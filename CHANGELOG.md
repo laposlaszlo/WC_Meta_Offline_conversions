@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.14] - 2026-02-17
+- Add toggleable setting to control event_source_url parameter
+- Users can now independently enable/disable sending event_source_url to Meta API
+- Note: EU Compliant Mode still overrides and disables event_source_url regardless of this setting
+
 ## [1.0.13] - 2026-02-17
 - No notable changes
 

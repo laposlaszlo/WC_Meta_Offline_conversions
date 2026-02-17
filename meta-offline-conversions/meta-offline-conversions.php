@@ -283,6 +283,7 @@ function moc_render_settings_page() {
     $event_name = !empty($settings['event_name']) ? $settings['event_name'] : 'Purchase';
     $minimal_data_mode = !empty($settings['minimal_data_mode']);
     $eu_compliant_mode = !empty($settings['eu_compliant_mode']);
+    $send_event_source_url = isset($settings['send_event_source_url']) ? (bool)$settings['send_event_source_url'] : true;
     $log_request_payload = !empty($settings['log_request_payload']);
     $test_event_code = isset($settings['test_event_code']) ? $settings['test_event_code'] : '';
     $enable_test_events = !empty($settings['enable_test_events']);
@@ -350,6 +351,12 @@ function moc_render_settings_page() {
     echo esc_html__('EU compliance mode (recommended for health/medical products)', 'meta-offline-conversions') . '</label>';
     echo '<p class="description"><strong>' . esc_html__('Enable this if Meta blocked your website for health-related content.', 'meta-offline-conversions') . '</strong><br />';
     echo esc_html__('Removes: product IDs, Facebook cookies (fbp/fbc), and event_source_url to comply with EU regulations.', 'meta-offline-conversions') . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Send Event Source URL', 'meta-offline-conversions') . '</th><td>';
+    echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[send_event_source_url]" value="1" ' . checked($send_event_source_url, true, false) . ' /> ';
+    echo esc_html__('Include event_source_url in API requests', 'meta-offline-conversions') . '</label>';
+    echo '<p class="description">' . esc_html__('When enabled, sends the checkout order URL to Meta. Disable for additional privacy or if Meta flags URL data. Note: EU Compliant Mode always disables this.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Log Request Payload', 'meta-offline-conversions') . '</th><td>';
@@ -1001,8 +1008,9 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
         'custom_data' => $custom_data,
     ];
 
-    // Add event_source_url only if NOT in EU compliant mode
-    if (!$eu_compliant_mode) {
+    // Add event_source_url only if enabled and NOT in EU compliant mode
+    $send_event_source_url = isset($settings['send_event_source_url']) ? (bool)$settings['send_event_source_url'] : true;
+    if (!$eu_compliant_mode && $send_event_source_url) {
         $event_source_url = $order->get_checkout_order_received_url();
         if (empty($event_source_url)) {
             $event_source_url = home_url('/');
