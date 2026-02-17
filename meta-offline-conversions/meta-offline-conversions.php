@@ -356,7 +356,7 @@ function moc_render_settings_page() {
     echo '<tr><th scope="row">' . esc_html__('Send Event Source URL', 'meta-offline-conversions') . '</th><td>';
     echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[send_event_source_url]" value="1" ' . checked($send_event_source_url, true, false) . ' /> ';
     echo esc_html__('Include event_source_url in API requests', 'meta-offline-conversions') . '</label>';
-    echo '<p class="description">' . esc_html__('When enabled, sends the checkout order URL to Meta. Disable for additional privacy or if Meta flags URL data. Note: EU Compliant Mode always disables this.', 'meta-offline-conversions') . '</p>';
+    echo '<p class="description">' . esc_html__('When enabled, sends the checkout order URL to Meta. Disable for additional privacy or if Meta flags URL data.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Log Request Payload', 'meta-offline-conversions') . '</th><td>';
@@ -1008,9 +1008,9 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
         'custom_data' => $custom_data,
     ];
 
-    // Add event_source_url only if enabled and NOT in EU compliant mode
+    // Add event_source_url only if enabled
     $send_event_source_url = isset($settings['send_event_source_url']) ? (bool)$settings['send_event_source_url'] : true;
-    if (!$eu_compliant_mode && $send_event_source_url) {
+    if ($send_event_source_url) {
         $event_source_url = $order->get_checkout_order_received_url();
         if (empty($event_source_url)) {
             $event_source_url = home_url('/');
