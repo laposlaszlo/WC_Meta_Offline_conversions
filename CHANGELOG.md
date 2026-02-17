@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-02-17
+- No notable changes
+
+## [1.0.10] - 2026-02-16
+- Add configurable Request Payload logging with UI toggle in Event Log
+- Show separate filters (All/Requests/Responses) to distinguish sent data from API responses
+
 ## [1.0.9] - 2026-02-16
 - Add EU Compliant Mode for Meta policy compliance with health/medical content
 

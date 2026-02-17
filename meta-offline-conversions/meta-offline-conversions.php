@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Meta Offline Conversions for WooCommerce
  * Description: Automatically sends WooCommerce Purchase events to the Meta Conversions API and stores FBP/FBC cookies on orders.
- * Version: 1.0.9
+ * Version: 1.0.10
  * Author: Lapos László
  * Text Domain: meta-offline-conversions
  * Plugin URI: https://github.com/laposlaszlo/WC_Meta_Offline_conversions
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MOC_VERSION', '1.0.9');
+define('MOC_VERSION', '1.0.10');
 define('MOC_OPTION_KEY', 'moc_settings');
 define('MOC_CAPABILITY', 'manage_woocommerce');
 define('MOC_CRON_HOOK', 'moc_cron_send_past_orders');
@@ -283,6 +283,7 @@ function moc_render_settings_page() {
     $event_name = !empty($settings['event_name']) ? $settings['event_name'] : 'Purchase';
     $minimal_data_mode = !empty($settings['minimal_data_mode']);
     $eu_compliant_mode = !empty($settings['eu_compliant_mode']);
+    $log_request_payload = !empty($settings['log_request_payload']);
     $enable_cron = !empty($settings['enable_cron']);
     $cron_interval = !empty($settings['cron_interval']) ? $settings['cron_interval'] : 'hourly';
     $cron_batch_size = !empty($settings['cron_batch_size']) ? (int) $settings['cron_batch_size'] : 50;
@@ -336,6 +337,12 @@ function moc_render_settings_page() {
     echo esc_html__('EU compliance mode (recommended for health/medical products)', 'meta-offline-conversions') . '</label>';
     echo '<p class="description"><strong>' . esc_html__('Enable this if Meta blocked your website for health-related content.', 'meta-offline-conversions') . '</strong><br />';
     echo esc_html__('Removes: product IDs, Facebook cookies (fbp/fbc), and specific event URLs to comply with EU regulations.', 'meta-offline-conversions') . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Log Request Payload', 'meta-offline-conversions') . '</th><td>';
+    echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[log_request_payload]" value="1" ' . checked($log_request_payload, true, false) . ' /> ';
+    echo esc_html__('Log request data sent to Meta API', 'meta-offline-conversions') . '</label>';
+    echo '<p class="description">' . esc_html__('Enable to see the full payload sent to Meta in the Event Log. Useful for debugging. Disable to only see API responses.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Auto Backfill (WP-Cron)', 'meta-offline-conversions') . '</th><td>';
@@ -422,11 +429,20 @@ function moc_render_settings_page() {
     echo '<h2>' . esc_html__('Event Log', 'meta-offline-conversions') . '</h2>';
     echo '<p>' . esc_html__('Recent plugin events from manual send, cron, and direct order send.', 'meta-offline-conversions') . '</p>';
 
-    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-bottom:12px;">';
+    echo '<div style="margin-bottom:12px;">';
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline-block;margin-right:10px;">';
     echo '<input type="hidden" name="action" value="moc_clear_admin_log" />';
     wp_nonce_field('moc_clear_admin_log');
     submit_button(__('Clear Log', 'meta-offline-conversions'), 'secondary', 'submit', false);
     echo '</form>';
+    
+    $log_filter = isset($_GET['log_filter']) ? sanitize_text_field($_GET['log_filter']) : 'all';
+    echo '<div style="display:inline-block;">';
+    echo '<a href="' . esc_url(add_query_arg(['page' => 'moc-settings', 'log_filter' => 'all'], admin_url('admin.php'))) . '" class="button' . ($log_filter === 'all' ? ' button-primary' : '') . '">' . esc_html__('All', 'meta-offline-conversions') . '</a> ';
+    echo '<a href="' . esc_url(add_query_arg(['page' => 'moc-settings', 'log_filter' => 'request'], admin_url('admin.php'))) . '" class="button' . ($log_filter === 'request' ? ' button-primary' : '') . '">' . esc_html__('Requests', 'meta-offline-conversions') . '</a> ';
+    echo '<a href="' . esc_url(add_query_arg(['page' => 'moc-settings', 'log_filter' => 'response'], admin_url('admin.php'))) . '" class="button' . ($log_filter === 'response' ? ' button-primary' : '') . '">' . esc_html__('Responses', 'meta-offline-conversions') . '</a>';
+    echo '</div>';
+    echo '</div>';
 
     $admin_log = moc_get_admin_log();
     if (empty($admin_log)) {
@@ -438,6 +454,15 @@ function moc_render_settings_page() {
         }
 
         $entries = array_reverse($admin_log);
+        
+        // Filter entries based on selection
+        if ($log_filter !== 'all') {
+            $entries = array_filter($entries, function($entry) use ($log_filter) {
+                $entry_type = isset($entry['type']) ? $entry['type'] : 'response';
+                return $entry_type === $log_filter;
+            });
+        }
+        
         if (count($entries) > $display_max) {
             $entries = array_slice($entries, 0, $display_max);
         }
@@ -489,6 +514,7 @@ function moc_sanitize_settings($input) {
 
     $output['minimal_data_mode'] = !empty($input['minimal_data_mode']) ? 1 : 0;
     $output['eu_compliant_mode'] = !empty($input['eu_compliant_mode']) ? 1 : 0;
+    $output['log_request_payload'] = !empty($input['log_request_payload']) ? 1 : 0;
 
     $output['enable_cron'] = !empty($input['enable_cron']) ? 1 : 0;
     $interval = isset($input['cron_interval']) ? sanitize_text_field($input['cron_interval']) : 'hourly';
@@ -578,7 +604,7 @@ function moc_clear_admin_log() {
     delete_option(MOC_ADMIN_LOG_OPTION);
 }
 
-function moc_add_admin_log_entry($message, $level = 'info', $context = []) {
+function moc_add_admin_log_entry($message, $level = 'info', $context = [], $type = 'response') {
     $entries = moc_get_admin_log();
 
     $context_text = '';
@@ -594,6 +620,7 @@ function moc_add_admin_log_entry($message, $level = 'info', $context = []) {
         'level' => sanitize_text_field((string) $level),
         'message' => moc_shorten_message((string) $message, 1000),
         'context' => $context_text,
+        'type' => sanitize_text_field((string) $type),
     ];
 
     $limit = moc_get_admin_log_limit();
@@ -612,6 +639,25 @@ function moc_log($message, $level = 'info', $context = []) {
     }
 
     moc_add_admin_log_entry($message, $level, $context);
+
+    if (function_exists('wc_get_logger')) {
+        $logger = wc_get_logger();
+        $logger->log($level, $message, array_merge(['source' => 'meta-offline-conversions'], (array) $context));
+    }
+
+    if (moc_debug_enabled() || $level !== 'debug') {
+        error_log($message);
+    }
+}
+
+function moc_log_with_type($message, $level = 'info', $context = [], $type = 'response') {
+    $message = '[Meta Offline] ' . $message;
+
+    if ($level === 'debug' && !moc_debug_enabled()) {
+        return;
+    }
+
+    moc_add_admin_log_entry($message, $level, $context, $type);
 
     if (function_exists('wc_get_logger')) {
         $logger = wc_get_logger();
@@ -951,6 +997,15 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
     $api_version = apply_filters('moc_meta_api_version', 'v21.0');
     $endpoint = 'https://graph.facebook.com/' . $api_version . '/' . rawurlencode($pixel_id) . '/events';
 
+    // Log request payload if enabled
+    if (!empty($settings['log_request_payload'])) {
+        $payload_for_log = [
+            'data' => [$event_data],
+            'access_token' => '****' . substr($access_token, -4)
+        ];
+        moc_log_with_type("Request payload for order #{$order_id}: " . wp_json_encode($payload_for_log, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), 'debug', [], 'request');
+    }
+
     moc_log("Sending {$event_name} event for order #{$order_id} to {$endpoint}.", 'debug');
 
     $response = wp_remote_post(
@@ -979,12 +1034,12 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
         $response_data = json_decode($body, true);
         if (isset($response_data['events_received']) && $response_data['events_received'] > 0) {
             update_post_meta($order_id, '_meta_offline_sent', current_time('mysql'));
-            moc_log("Meta response 200 OK for order #{$order_id}. Full response: " . $body, 'debug');
+            moc_log_with_type("Meta response 200 OK for order #{$order_id}. Full response: " . $body, 'debug', [], 'response');
             return moc_result('sent', 'events_received:' . (int) $response_data['events_received']);
         }
     }
 
-    moc_log("Meta Offline Response (Order #{$order_id}): Status {$status_code} - " . moc_shorten_message($body, 500), 'error');
+    moc_log_with_type("Meta Offline Response (Order #{$order_id}): Status {$status_code} - " . moc_shorten_message($body, 500), 'error', [], 'response');
     $message = 'http_' . $status_code . ': ' . moc_shorten_message($body);
     return moc_result('error', $message);
 }
