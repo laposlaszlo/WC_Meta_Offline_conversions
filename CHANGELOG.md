@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.16] - 2026-02-17
+- Fix: send_event_source_url setting was not saved in options (critical bugfix)
+
 ## [1.0.15] - 2026-02-17
 - Add toggleable setting to control event_source_url parameter
 - Users can now independently enable/disable sending event_source_url to Meta API
