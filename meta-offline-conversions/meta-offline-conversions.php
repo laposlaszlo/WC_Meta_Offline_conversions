@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Meta Offline Conversions for WooCommerce
  * Description: Automatically sends WooCommerce Purchase events to the Meta Conversions API and stores FBP/FBC cookies on orders.
- * Version: 1.0.16
+ * Version: 1.0.17
  * Author: Lapos László
  * Text Domain: meta-offline-conversions
  * Plugin URI: https://github.com/laposlaszlo/WC_Meta_Offline_conversions
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MOC_VERSION', '1.0.16');
+define('MOC_VERSION', '1.0.17');
 define('MOC_OPTION_KEY', 'moc_settings');
 define('MOC_CAPABILITY', 'manage_woocommerce');
 define('MOC_CRON_HOOK', 'moc_cron_send_past_orders');
@@ -350,7 +350,7 @@ function moc_render_settings_page() {
     echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[eu_compliant_mode]" value="1" ' . checked($eu_compliant_mode, true, false) . ' /> ';
     echo esc_html__('EU compliance mode (recommended for health/medical products)', 'meta-offline-conversions') . '</label>';
     echo '<p class="description"><strong>' . esc_html__('Enable this if Meta blocked your website for health-related content.', 'meta-offline-conversions') . '</strong><br />';
-    echo esc_html__('Removes: product IDs, Facebook cookies (fbp/fbc), and event_source_url to comply with EU regulations.', 'meta-offline-conversions') . '</p>';
+    echo esc_html__('Removes: Facebook cookies (fbp/fbc) from API requests. Product IDs and event_source_url are controlled by their own separate settings.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Send Event Source URL', 'meta-offline-conversions') . '</th><td>';

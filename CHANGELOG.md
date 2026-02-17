@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.17] - 2026-02-17
+- Fix: Corrected EU Compliant Mode description to accurately reflect that it only removes Facebook cookies (fbp/fbc), not event_source_url
+
 ## [1.0.16] - 2026-02-17
 - Fix: send_event_source_url setting was not saved in options (critical bugfix)
 
