@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Meta Offline Conversions for WooCommerce
  * Description: Automatically sends WooCommerce Purchase events to the Meta Conversions API and stores FBP/FBC cookies on orders.
- * Version: 1.0.12
+ * Version: 1.0.13
  * Author: Lapos László
  * Text Domain: meta-offline-conversions
  * Plugin URI: https://github.com/laposlaszlo/WC_Meta_Offline_conversions
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MOC_VERSION', '1.0.12');
+define('MOC_VERSION', '1.0.13');
 define('MOC_OPTION_KEY', 'moc_settings');
 define('MOC_CAPABILITY', 'manage_woocommerce');
 define('MOC_CRON_HOOK', 'moc_cron_send_past_orders');
@@ -1009,8 +1009,6 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
         }
         $event_data['event_source_url'] = $event_source_url;
     }
-        'custom_data' => $custom_data,
-    ];
 
     $api_version = apply_filters('moc_meta_api_version', 'v21.0');
     $endpoint = 'https://graph.facebook.com/' . $api_version . '/' . rawurlencode($pixel_id) . '/events';
