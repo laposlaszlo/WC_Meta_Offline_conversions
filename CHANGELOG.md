@@ -4,10 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [1.0.10] - 2026-02-17
+## [1.0.11] - 2026-02-17
 - No notable changes
 
-## [1.0.10] - 2026-02-16
+## [1.0.11] - 2026-02-17
+- Add Test Event Code configuration for Meta Events Manager integration
+- Add Enable Test Events toggle to send events in test mode without affecting live data
+- Test events appear in Meta Events Manager for validation before production use
+
+## [1.0.10] - 2026-02-17
 - Add configurable Request Payload logging with UI toggle in Event Log
 - Show separate filters (All/Requests/Responses) to distinguish sent data from API responses
 

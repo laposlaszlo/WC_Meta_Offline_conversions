@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Meta Offline Conversions for WooCommerce
  * Description: Automatically sends WooCommerce Purchase events to the Meta Conversions API and stores FBP/FBC cookies on orders.
- * Version: 1.0.10
+ * Version: 1.0.11
  * Author: Lapos László
  * Text Domain: meta-offline-conversions
  * Plugin URI: https://github.com/laposlaszlo/WC_Meta_Offline_conversions
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MOC_VERSION', '1.0.10');
+define('MOC_VERSION', '1.0.11');
 define('MOC_OPTION_KEY', 'moc_settings');
 define('MOC_CAPABILITY', 'manage_woocommerce');
 define('MOC_CRON_HOOK', 'moc_cron_send_past_orders');
@@ -284,6 +284,8 @@ function moc_render_settings_page() {
     $minimal_data_mode = !empty($settings['minimal_data_mode']);
     $eu_compliant_mode = !empty($settings['eu_compliant_mode']);
     $log_request_payload = !empty($settings['log_request_payload']);
+    $test_event_code = isset($settings['test_event_code']) ? $settings['test_event_code'] : '';
+    $enable_test_events = !empty($settings['enable_test_events']);
     $enable_cron = !empty($settings['enable_cron']);
     $cron_interval = !empty($settings['cron_interval']) ? $settings['cron_interval'] : 'hourly';
     $cron_batch_size = !empty($settings['cron_batch_size']) ? (int) $settings['cron_batch_size'] : 50;
@@ -307,6 +309,17 @@ function moc_render_settings_page() {
     echo '<input type="password" name="' . esc_attr(MOC_OPTION_KEY) . '[access_token]" value="" class="regular-text" autocomplete="new-password" />';
     echo '<p class="description">' . sprintf(esc_html__('Leave blank to keep existing token. Current: %s', 'meta-offline-conversions'), esc_html($token_hint)) . '</p>';
     echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[clear_token]" value="1" /> ' . esc_html__('Clear stored token', 'meta-offline-conversions') . '</label>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Test Event Code', 'meta-offline-conversions') . '</th><td>';
+    echo '<input type="text" name="' . esc_attr(MOC_OPTION_KEY) . '[test_event_code]" value="' . esc_attr($test_event_code) . '" class="regular-text" />';
+    echo '<p class="description">' . esc_html__('Test event code from Meta Events Manager (e.g., TEST12345). Get it from Events Manager > Test Events.', 'meta-offline-conversions') . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th scope="row">' . esc_html__('Enable Test Events', 'meta-offline-conversions') . '</th><td>';
+    echo '<label><input type="checkbox" name="' . esc_attr(MOC_OPTION_KEY) . '[enable_test_events]" value="1" ' . checked($enable_test_events, true, false) . ' /> ';
+    echo esc_html__('Send events in test mode', 'meta-offline-conversions') . '</label>';
+    echo '<p class="description">' . esc_html__('When enabled, events will be sent as test events using the Test Event Code above. Test events appear in Meta Events Manager but don\'t affect live data.', 'meta-offline-conversions') . '</p>';
     echo '</td></tr>';
 
     echo '<tr><th scope="row">' . esc_html__('Debug Logging', 'meta-offline-conversions') . '</th><td>';
@@ -515,6 +528,10 @@ function moc_sanitize_settings($input) {
     $output['minimal_data_mode'] = !empty($input['minimal_data_mode']) ? 1 : 0;
     $output['eu_compliant_mode'] = !empty($input['eu_compliant_mode']) ? 1 : 0;
     $output['log_request_payload'] = !empty($input['log_request_payload']) ? 1 : 0;
+
+    $test_event_code = isset($input['test_event_code']) ? sanitize_text_field($input['test_event_code']) : '';
+    $output['test_event_code'] = $test_event_code;
+    $output['enable_test_events'] = !empty($input['enable_test_events']) ? 1 : 0;
 
     $output['enable_cron'] = !empty($input['enable_cron']) ? 1 : 0;
     $interval = isset($input['cron_interval']) ? sanitize_text_field($input['cron_interval']) : 'hourly';
@@ -1006,15 +1023,24 @@ function moc_send_purchase_to_meta($order_id, $force = false) {
         moc_log_with_type("Request payload for order #{$order_id}: " . wp_json_encode($payload_for_log, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), 'debug', [], 'request');
     }
 
+    // Build API request body
+    $api_body = [
+        'data' => [$event_data],
+        'access_token' => $access_token,
+    ];
+
+    // Add test_event_code if test mode is enabled
+    if (!empty($settings['enable_test_events']) && !empty($settings['test_event_code'])) {
+        $api_body['test_event_code'] = sanitize_text_field($settings['test_event_code']);
+        moc_log("Test mode enabled - using test_event_code: {$api_body['test_event_code']}", 'debug');
+    }
+
     moc_log("Sending {$event_name} event for order #{$order_id} to {$endpoint}.", 'debug');
 
     $response = wp_remote_post(
         $endpoint,
         [
-            'body' => wp_json_encode([
-                'data' => [$event_data],
-                'access_token' => $access_token,
-            ]),
+            'body' => wp_json_encode($api_body),
             'headers' => [
                 'Content-Type' => 'application/json',
             ],
